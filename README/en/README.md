@@ -26,19 +26,22 @@ Supported version: **Minecraft 26.3** (data version 5023). The code is designed 
 
 ## Installation
 
-### Option 1: Git dependency (recommended)
-
-The crates are not published on crates.io yet. Add them as git dependencies:
+### Option 1: crates.io (recommended)
 
 ```toml
 [dependencies]
-chunker-worldgen = { git = "https://github.com/mochensky/chunker-worldgen" }
-chunker-data = { git = "https://github.com/mochensky/chunker-worldgen" }
-chunker-anvil = { git = "https://github.com/mochensky/chunker-worldgen" }
-chunker-nbt = { git = "https://github.com/mochensky/chunker-worldgen" }
+chunker-worldgen = "0.1"
 ```
 
-You only need the crates you use:
+The other crates come along as its dependencies; add them yourself only if you use them directly:
+
+```toml
+chunker-data = "0.1"
+chunker-anvil = "0.1"
+chunker-nbt = "0.1"
+```
+
+What each crate does:
 
 - `chunker-worldgen` — world generation
 - `chunker-data` — identifiers, data packs, tags, block registry, server jar lookup and download
@@ -52,7 +55,16 @@ Generation is CPU-heavy, so build in release mode. To keep debug builds usable, 
 opt-level = 3
 ```
 
-### Option 2: Local copy
+### Option 2: Git or a local copy
+
+The latest code from the repository:
+
+```toml
+[dependencies]
+chunker-worldgen = { git = "https://github.com/mochensky/chunker-worldgen" }
+```
+
+Or a local copy:
 
 ```bash
 git clone https://github.com/mochensky/chunker-worldgen

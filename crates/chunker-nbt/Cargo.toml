@@ -4,9 +4,8 @@ description = "Small, fast NBT (Named Binary Tag) reader and writer for Minecraf
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 repository.workspace = true
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["minecraft", "nbt", "serialization"]
 categories = ["game-development"]
 

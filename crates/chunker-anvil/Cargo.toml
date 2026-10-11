@@ -4,9 +4,8 @@ description = "Anvil region file (.mca/.mcc) reader and writer for Minecraft: Ja
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 repository.workspace = true
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["minecraft", "anvil", "region", "mca"]
 categories = ["game-development"]
 

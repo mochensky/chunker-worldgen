@@ -26,19 +26,22 @@
 
 ## Установка
 
-### Вариант 1: Git-зависимость (рекомендуется)
-
-Крейты пока не опубликованы на crates.io. Подключите их как git-зависимости:
+### Вариант 1: crates.io (рекомендуется)
 
 ```toml
 [dependencies]
-chunker-worldgen = { git = "https://github.com/mochensky/chunker-worldgen" }
-chunker-data = { git = "https://github.com/mochensky/chunker-worldgen" }
-chunker-anvil = { git = "https://github.com/mochensky/chunker-worldgen" }
-chunker-nbt = { git = "https://github.com/mochensky/chunker-worldgen" }
+chunker-worldgen = "0.1"
 ```
 
-Нужны только те крейты, которые вы используете:
+Остальные крейты подтянутся как его зависимости; добавляйте их сами, только если используете напрямую:
+
+```toml
+chunker-data = "0.1"
+chunker-anvil = "0.1"
+chunker-nbt = "0.1"
+```
+
+Что делает каждый крейт:
 
 - `chunker-worldgen` — генерация мира
 - `chunker-data` — идентификаторы, датапаки, теги, реестр блоков, поиск и загрузка jar сервера
@@ -52,7 +55,16 @@ chunker-nbt = { git = "https://github.com/mochensky/chunker-worldgen" }
 opt-level = 3
 ```
 
-### Вариант 2: Локальная копия
+### Вариант 2: Git или локальная копия
+
+Самый свежий код из репозитория:
+
+```toml
+[dependencies]
+chunker-worldgen = { git = "https://github.com/mochensky/chunker-worldgen" }
+```
+
+Или локальная копия:
 
 ```bash
 git clone https://github.com/mochensky/chunker-worldgen

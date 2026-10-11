@@ -4,9 +4,8 @@ description = "Vanilla data for chunker-worldgen: data pack stack, tags, block r
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 repository.workspace = true
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["minecraft", "datapack", "registry"]
 categories = ["game-development"]
 

@@ -4,11 +4,12 @@ description = "Bit-exact reimplementation of Minecraft: Java Edition world gener
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
 repository.workspace = true
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["minecraft", "worldgen", "terrain", "procedural", "gamedev"]
 categories = ["game-development"]
+# The oracle tests need the vanilla server and the repository layout.
+exclude = ["tests/"]
 
 [dependencies]
 anyhow.workspace = true

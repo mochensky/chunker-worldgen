@@ -26,8 +26,7 @@ Or add the library to your project:
 
 ```toml
 [dependencies]
-chunker-worldgen = { git = "https://github.com/mochensky/chunker-worldgen" }
-chunker-data = { git = "https://github.com/mochensky/chunker-worldgen" }
+chunker-worldgen = "0.1"
 ```
 
 The server jar with the vanilla data is downloaded from Mojang automatically. See the full guide in the documentation linked above.
