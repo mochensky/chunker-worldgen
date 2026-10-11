@@ -1,0 +1,29 @@
+[package]
+name = "chunker-worldgen"
+description = "Bit-exact reimplementation of Minecraft: Java Edition world generation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["minecraft", "worldgen", "terrain", "procedural", "gamedev"]
+categories = ["game-development"]
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+rustc-hash.workspace = true
+md-5.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+chunker-data.workspace = true
+chunker-nbt.workspace = true
+
+[dev-dependencies]
+chunker-anvil.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,34 @@
+# Rust build output
+/target/
+**/*.rs.bk
+
+# Vanilla Minecraft artifacts (server jars, decompiled sources, extracted data).
+# Mojang code/data must never be committed; regenerate with `cargo xtask vanilla`.
+/vanilla/
+
+# Local run directories / test worlds
+/run/
+/worlds/
+*.mca
+*.mcc
+session.lock
+
+# chunker runtime state written next to worlds
+.chunker/
+
+# Java oracle build output
+/tools/oracle/build/
+
+# IDE / OS noise
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs / profiling
+*.log
+hs_err_pid*.log
+perf.data*
+flamegraph*.svg

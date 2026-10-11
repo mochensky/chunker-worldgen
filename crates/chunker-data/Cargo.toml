@@ -1,0 +1,27 @@
+[package]
+name = "chunker-data"
+description = "Vanilla data for chunker-worldgen: data pack stack, tags, block registry, server jar lookup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["minecraft", "datapack", "registry"]
+categories = ["game-development"]
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zip.workspace = true
+ureq.workspace = true
+sha1.workspace = true
+rustc-hash.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+chunker-nbt.workspace = true
+
+[lints]
+workspace = true
