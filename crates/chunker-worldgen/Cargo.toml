@@ -21,9 +21,11 @@ tracing.workspace = true
 parking_lot.workspace = true
 chunker-data.workspace = true
 chunker-nbt.workspace = true
-
-[dev-dependencies]
 chunker-anvil.workspace = true
+serde.workspace = true
+rayon.workspace = true
+flate2.workspace = true
+lz4_flex.workspace = true
 
 [lints]
 workspace = true

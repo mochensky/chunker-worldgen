@@ -14,12 +14,12 @@ The code is written from scratch against the decompiled vanilla server and is ch
 
 ## Quick start
 
-Generate a few chunks and write them to a region file:
+Pre-generate an area of a world (stop the server first):
 
 ```bash
 git clone https://github.com/mochensky/chunker-worldgen
 cd chunker-worldgen
-cargo run --release --example terrain
+cargo run --release --example pregenerate -- /path/to/server 512
 ```
 
 Or add the library to your project:

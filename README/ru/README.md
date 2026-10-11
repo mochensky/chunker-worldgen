@@ -15,6 +15,7 @@
 - **Ванильные данные во время работы** — worldgen JSON и шаблоны структур читаются из официального jar сервера вместе с датапаками самого мира.
 - **Ванильные форматы** — NBT чанков, region-файлы Anvil (`.mca` / `.mcc`), чтение и запись NBT.
 - **Проверка по ванилле** — тесты запускают настоящие классы сервера и сравнивают результаты побитово.
+- **Предгенерация** — `World` открывает папку сервера или мира и параллельно генерирует область с прогрессом, паузой, продолжением после перезапуска и превью карты.
 - **Скорость** — около 5 мс на чанк рельефа в одном потоке, около 1500 чанков в секунду со структурами и фичами на 24 потоках.
 
 ## Требования
@@ -63,11 +64,75 @@ chunker-worldgen = { path = "../chunker-worldgen/crates/chunker-worldgen" }
 chunker-data = { path = "../chunker-worldgen/crates/chunker-data" }
 ```
 
-> **Важно:** API пока открывает много внутренностей и изменится до первого релиза.
+> **Важно:** `World` и задания — основная точка входа; низкоуровневые модули открывают много внутренностей и могут измениться до первого релиза.
 
-## Начало работы
+## Предгенерация мира
 
-Полная программа для шагов ниже — [`examples/terrain.rs`](../../crates/chunker-worldgen/examples/terrain.rs).
+`World` открывает папку сервера или мира и генерирует его область целиком, как ванилла: рельеф, структуры, фичи и мобов структур. Чанки записываются в region-файлы мира со статусом `features`; свет и спавн животных сервер добавит сам при их загрузке.
+
+```rust
+use std::path::PathBuf;
+use chunker_worldgen::job::{JobSpec, Shape};
+use chunker_worldgen::{World, WorldOptions};
+
+let world = World::open(WorldOptions {
+    path: PathBuf::from("my-server"),
+    server_jar: None,
+    cache_dir: PathBuf::from("cache"),
+    allow_download: true,
+})?;
+
+let job = world.start(JobSpec {
+    dimension: "minecraft:overworld".into(),
+    center_x: 0,
+    center_z: 0,
+    radius: 1024,
+    shape: Shape::Square,
+    skip_existing: true,
+    threads: 0,
+    decorate: true,
+})?;
+
+while job.is_active() {
+    let s = job.snapshot();
+    println!("{}/{} chunks, {:.0} chunks/s", s.generated_chunks + s.skipped_chunks, s.total_chunks, s.chunks_per_second);
+    std::thread::sleep(std::time::Duration::from_secs(1));
+}
+world.wait();
+```
+
+> **Важно:** сначала остановите сервер. Задание берёт `session.lock` так же, как сервер, и не запустится, если мир занят.
+
+Что делает задание:
+
+- **Порядок** — сначала регионы ближе к центру; рельеф параллельно, затем шаг `features` в 9 фаз, чтобы соседние чанки никогда не декорировались одновременно.
+- **Существующие чанки** — никогда не перезаписываются. С `skip_existing` они пропускаются и служат соседям источником данных для чтения.
+- **Пауза и продолжение** — `world.pause()`, `world.resume()`, `world.cancel()`. Прогресс хранится в `<мир>/.chunker/job.json`: `World::open` находит незаконченное задание, а `resume()` продолжает его после перезапуска.
+- **Только рельеф** — с `decorate: false` чанки сохраняются со статусом `terrain`, это примерно на треть быстрее; структуры и фичи сервер расставит при первой загрузке чанков.
+- **Сложность и время** — читаются из мира (`level.dat` и `data/minecraft/world_clocks.dat`); от них зависит снаряжение мобов структур.
+- **Превью карты** — `world.previews(&dimension)` хранит картинку карты 128x128 на регион (ванильные цвета карты и биомы) и обновляет её во время работы задания.
+
+Поля `JobSpec`:
+
+| Поле | Значение |
+|---|---|
+| `dimension` | id измерения, например `minecraft:overworld`, `minecraft:the_nether` |
+| `center_x`, `center_z` | центр в координатах блоков |
+| `radius` | радиус в блоках |
+| `shape` | `Square` или `Circle`; чанк входит в область, если в неё попадает его центр |
+| `skip_existing` | не трогать уже существующие чанки |
+| `threads` | число рабочих потоков, `0` — все ядра |
+| `decorate` | выполнять шаг `features` (структуры, фичи, мобы) |
+
+Полная программа — [`examples/pregenerate.rs`](../../crates/chunker-worldgen/examples/pregenerate.rs):
+
+```bash
+cargo run --release --example pregenerate -- <папка сервера или мира> 512
+```
+
+## Низкоуровневый API
+
+Части, из которых собрано задание, можно использовать напрямую. Шаги ниже генерируют рельеф отдельных чанков в памяти; полная программа — [`examples/terrain.rs`](../../crates/chunker-worldgen/examples/terrain.rs).
 
 ### Шаг 1: Загрузите ванильные данные
 
@@ -176,7 +241,7 @@ wrote target/terrain-example/r.-1.-2.mca
 
 ### Сложность и время мира
 
-Мобы структур зависят от мира: броня и зачарования выпадают чаще с ростом сложности и возраста мира. Задайте их в `FeatureEnv` измерения перед декорированием из `level.dat` (`difficulty_settings`, `Time`) и часов Верхнего мира в `data/minecraft/world_clocks.dat`:
+Мобы структур зависят от мира: броня и зачарования выпадают чаще с ростом сложности и возраста мира. `World` читает их из мира сам; в низкоуровневом API задайте их в `FeatureEnv` измерения перед декорированием из `level.dat` (`difficulty_settings`, `Time`) и часов Верхнего мира в `data/minecraft/world_clocks.dat`:
 
 ```rust
 use chunker_worldgen::entity::{Difficulty, SpawnSettings};
@@ -191,7 +256,7 @@ features.spawn = SpawnSettings {
 
 По умолчанию это новый мир на нормальной сложности. Несколько значений ванилла берёт из незасеянного генератора самой сущности (бонусные атрибуты зомби, поворот шалкеров); с конкретным запуском ванилы они совпасть не могут и берутся из генератора, засеянного позицией сущности.
 
-## Другие измерения
+### Другие измерения
 
 Незер и Энд работают так же, со своими настройками и источниками биомов:
 
@@ -203,7 +268,7 @@ features.spawn = SpawnSettings {
 
 Используйте высоту мира из типа измерения: `-64` и `384` для Верхнего мира, `0` и `256` для Незера и Энда.
 
-## Чтение region-файлов и NBT
+### Чтение region-файлов и NBT
 
 [`examples/read_region.rs`](../../crates/chunker-worldgen/examples/read_region.rs) выводит список чанков region-файла:
 
@@ -224,9 +289,9 @@ cargo run --release --example read_region -- target/terrain-example -1 -2
 
 `chunker-nbt` читает и пишет обычный и сжатый NBT: `read_root`, `read_compressed`, `write_root`, `write_compressed` (например, `level.dat`).
 
-## Структуры и фичи
+### Структуры и фичи
 
-Стартовые точки структур (`structure`), beardifier (`terrain::beardifier`) и шаг `features` (`feature`) реализованы и проверены, но требуют больше подготовки, чем рельеф: состояние структур измерения, общий для чанков кэш стартовых точек и область 3x3 чанков, готовых к декорированию. Компактный API для всего конвейера — следующий шаг. До тех пор полный конвейер можно посмотреть в `chunker-engine` утилиты [chunker](https://github.com/mochensky/chunker).
+Декорированному чанку нужны соседи: он декорируется вместе с 8 чанками вокруг, а стартовые точки структур берутся из чанков на расстоянии до 8. Задания делают это сами. Если нужны сами генераторы, `world.dimension(&id)` возвращает `Dimension` со всеми ними: `terrain` (`TerrainGenerator`), `structures` (`StructureGenerator`) и `features` (`FeatureEnv`, его использует `feature::decorate`).
 
 ## Что не реализовано
 
@@ -402,7 +467,7 @@ Worldgen JSON (настройки шума, функции плотности, �
 ```
 ├── crates/
 │   ├── chunker-worldgen/      — генерация мира
-│   │   ├── examples/          — terrain, read_region, bench_terrain
+│   │   ├── examples/          — pregenerate, terrain, read_region, bench_terrain
 │   │   └── tests/             — проверочные тесты по ванилле
 │   ├── chunker-data/          — датапаки, теги, реестр блоков, поиск jar сервера
 │   │   └── data/<версия>/     — встроенные таблицы
@@ -417,6 +482,9 @@ Worldgen JSON (настройки шума, функции плотности, �
 
 ```
 src/
+├── world/             — World: открытие папки сервера или мира, датапаки, измерения, управление заданиями
+├── job/               — задания предгенерации: порядок регионов, фазы рельефа и декорирования, запись регионов, продолжение
+├── preview.rs         — превью карты: ванильные цвета карты, карты биомов, PNG-тайлы
 ├── math/              — Mth, семантика java.lang.Math, Interval, корректно округлённые sin/cos
 ├── java.rs            — порядок обхода java.util.HashSet
 ├── random/            — LegacyRandomSource, XoroshiroRandomSource, WorldgenRandom, RandomSupport

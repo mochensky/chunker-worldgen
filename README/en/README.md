@@ -15,6 +15,7 @@ Supported version: **Minecraft 26.3** (data version 5023). The code is designed 
 - **Vanilla data at runtime** — worldgen JSON and structure templates are read from the official server jar, together with the world's own data packs.
 - **Vanilla formats** — chunk NBT, Anvil region files (`.mca` / `.mcc`), NBT reading and writing.
 - **Verified against vanilla** — the tests run the real server classes and compare the results bit for bit.
+- **Pre-generation** — `World` opens a server or world folder and generates an area in parallel, with progress, pause, resume after a restart and map previews.
 - **Speed** — about 5 ms per chunk of terrain on one thread, about 1500 chunks per second with structures and features on 24 threads.
 
 ## Requirements
@@ -63,11 +64,75 @@ chunker-worldgen = { path = "../chunker-worldgen/crates/chunker-worldgen" }
 chunker-data = { path = "../chunker-worldgen/crates/chunker-data" }
 ```
 
-> **Important:** the API still exposes many internals and will change before the first release.
+> **Important:** `World` and the jobs are the stable entry point; the lower-level modules expose many internals and may change before the first release.
 
-## Getting started
+## Pre-generating a world
 
-The full program for the steps below is [`examples/terrain.rs`](../../crates/chunker-worldgen/examples/terrain.rs).
+`World` opens a server or world folder and generates an area of it with everything vanilla generates: terrain, structures, features and structure mobs. Chunks are written to the world's region files at the `features` status; the server adds light and spawns animals when it loads them.
+
+```rust
+use std::path::PathBuf;
+use chunker_worldgen::job::{JobSpec, Shape};
+use chunker_worldgen::{World, WorldOptions};
+
+let world = World::open(WorldOptions {
+    path: PathBuf::from("my-server"),
+    server_jar: None,
+    cache_dir: PathBuf::from("cache"),
+    allow_download: true,
+})?;
+
+let job = world.start(JobSpec {
+    dimension: "minecraft:overworld".into(),
+    center_x: 0,
+    center_z: 0,
+    radius: 1024,
+    shape: Shape::Square,
+    skip_existing: true,
+    threads: 0,
+    decorate: true,
+})?;
+
+while job.is_active() {
+    let s = job.snapshot();
+    println!("{}/{} chunks, {:.0} chunks/s", s.generated_chunks + s.skipped_chunks, s.total_chunks, s.chunks_per_second);
+    std::thread::sleep(std::time::Duration::from_secs(1));
+}
+world.wait();
+```
+
+> **Important:** stop the server first. The job takes `session.lock` like the server does and fails if the world is in use.
+
+What the job does:
+
+- **Order** — regions nearest to the center first; terrain in parallel, then the `features` step in 9 phases, so that neighbouring chunks are never decorated at the same time.
+- **Existing chunks** — never overwritten. With `skip_existing` they are skipped, and they stand in for reads of their neighbours.
+- **Pause and resume** — `world.pause()`, `world.resume()`, `world.cancel()`. Progress is saved in `<world>/.chunker/job.json`: `World::open` finds an unfinished job, and `resume()` continues it after a restart.
+- **Terrain only** — `decorate: false` saves chunks at `terrain`, about a third faster; the server then places structures and features when the chunks first load.
+- **Difficulty and time** — read from the world (`level.dat` and `data/minecraft/world_clocks.dat`); structure mobs get their equipment from them.
+- **Map previews** — `world.previews(&dimension)` keeps a 128x128 map image per region (vanilla map colours and biomes), updated while the job runs.
+
+`JobSpec` fields:
+
+| Field | Meaning |
+|---|---|
+| `dimension` | dimension id, e.g. `minecraft:overworld`, `minecraft:the_nether` |
+| `center_x`, `center_z` | center in block coordinates |
+| `radius` | radius in blocks |
+| `shape` | `Square` or `Circle`; a chunk belongs to the area when its center does |
+| `skip_existing` | leave chunks that already exist as they are |
+| `threads` | worker threads, `0` for all CPUs |
+| `decorate` | run the `features` step (structures, features, mobs) |
+
+The full program is [`examples/pregenerate.rs`](../../crates/chunker-worldgen/examples/pregenerate.rs):
+
+```bash
+cargo run --release --example pregenerate -- <server or world folder> 512
+```
+
+## Lower-level API
+
+The parts a job is built from can be used directly. The steps below generate the terrain of single chunks in memory; the full program is [`examples/terrain.rs`](../../crates/chunker-worldgen/examples/terrain.rs).
 
 ### Step 1: Load the vanilla data
 
@@ -174,9 +239,9 @@ chunk  -11  -56: surface at y=62   minecraft:water[level=0]
 wrote target/terrain-example/r.-1.-2.mca
 ```
 
-### World difficulty and time
+### Difficulty and time of the world
 
-Structure mobs depend on the world: their armor and enchantments get more likely with the difficulty and the age of the world. Set them on the `FeatureEnv` of the dimension before decorating, from `level.dat` (`difficulty_settings`, `Time`) and the overworld clock in `data/minecraft/world_clocks.dat`:
+Structure mobs depend on the world: their armor and enchantments get more likely with the difficulty and the age of the world. `World` reads them from the world; with the lower-level API, set them on the `FeatureEnv` of the dimension before decorating, from `level.dat` (`difficulty_settings`, `Time`) and the overworld clock in `data/minecraft/world_clocks.dat`:
 
 ```rust
 use chunker_worldgen::entity::{Difficulty, SpawnSettings};
@@ -191,7 +256,7 @@ features.spawn = SpawnSettings {
 
 The default is a new world on normal difficulty. A few values vanilla takes from an unseeded random of each entity (bonus attributes of zombies, the yaw of shulkers) can't match a particular vanilla run; they are drawn from a random seeded by the entity position.
 
-## Other dimensions
+### Other dimensions
 
 The Nether and the End work the same way with their own settings and biome sources:
 
@@ -203,7 +268,7 @@ The Nether and the End work the same way with their own settings and biome sourc
 
 Use the build height of the dimension type: `-64` and `384` for the Overworld, `0` and `256` for the Nether and the End.
 
-## Reading region files and NBT
+### Reading region files and NBT
 
 [`examples/read_region.rs`](../../crates/chunker-worldgen/examples/read_region.rs) lists the chunks of a region file:
 
@@ -224,9 +289,9 @@ cargo run --release --example read_region -- target/terrain-example -1 -2
 
 `chunker-nbt` reads and writes plain and compressed NBT: `read_root`, `read_compressed`, `write_root`, `write_compressed` (for example, `level.dat`).
 
-## Structures and features
+### Structures and features
 
-Structure starts (`structure`), the beardifier (`terrain::beardifier`) and the `features` step (`feature`) are implemented and verified, but they need more setup than terrain: the structure state of the dimension, a cache of starts shared between chunks, and a 3x3 region of chunks that are ready for decoration. A compact API for the whole pipeline is the next step. Until then, the complete pipeline can be found in `chunker-engine` of [chunker](https://github.com/mochensky/chunker).
+A decorated chunk needs its neighbours: it is decorated together with the 8 chunks around it, and structure starts come from chunks up to 8 away. Jobs take care of that. If you need the generators themselves, `world.dimension(&id)` returns the `Dimension` with all of them: `terrain` (`TerrainGenerator`), `structures` (`StructureGenerator`) and `features` (`FeatureEnv`, used by `feature::decorate`).
 
 ## What is not implemented
 
@@ -402,7 +467,7 @@ The Overworld and Nether parameter lists are built in code by vanilla too. They 
 ```
 ├── crates/
 │   ├── chunker-worldgen/      — world generation
-│   │   ├── examples/          — terrain, read_region, bench_terrain
+│   │   ├── examples/          — pregenerate, terrain, read_region, bench_terrain
 │   │   └── tests/             — verification tests against vanilla
 │   ├── chunker-data/          — data packs, tags, block registry, server jar lookup
 │   │   └── data/<version>/    — embedded tables
@@ -417,6 +482,9 @@ Modules of `chunker-worldgen` and the vanilla classes they port:
 
 ```
 src/
+├── world/             — World: opening a server or world folder, data packs, dimensions, job control
+├── job/               — pre-generation jobs: region order, terrain and decoration phases, region writing, resume
+├── preview.rs         — map previews: vanilla map colours, biome maps, PNG tiles
 ├── math/              — Mth, java.lang.Math semantics, Interval, correctly rounded sin/cos
 ├── java.rs            — java.util.HashSet iteration order
 ├── random/            — LegacyRandomSource, XoroshiroRandomSource, WorldgenRandom, RandomSupport
