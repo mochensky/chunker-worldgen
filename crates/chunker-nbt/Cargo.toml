@@ -3,6 +3,7 @@ name = "chunker-nbt"
 description = "Small, fast NBT (Named Binary Tag) reader and writer for Minecraft: Java Edition"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"

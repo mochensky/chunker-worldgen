@@ -221,7 +221,7 @@ pub fn shipwreck<'c>(ctx: &mut GenContext, beached: bool) -> Option<Stub<'c>> {
             } else {
                 &SHIPWRECKS_OCEAN
             };
-            let id = mc(pick(list, &mut ctx.random));
+            let id = mc(pick::<&str>(list, &mut ctx.random));
             let mut piece = TemplatedPiece::new(
                 ctx,
                 TemplatedKind::Shipwreck {

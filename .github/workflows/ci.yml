@@ -21,3 +21,12 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Oracle tests need the vanilla server and Java; without them they are skipped.
       - run: cargo test --workspace
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.90.0
+      - uses: Swatinem/rust-cache@v2
+      # The `rust-version` the crates declare.
+      - run: cargo check --workspace --all-targets

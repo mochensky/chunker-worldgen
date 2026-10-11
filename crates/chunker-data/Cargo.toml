@@ -3,6 +3,7 @@ name = "chunker-data"
 description = "Vanilla data for chunker-worldgen: data pack stack, tags, block registry, server jar lookup"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 readme = "README.md"
