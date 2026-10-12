@@ -18,6 +18,7 @@ use crate::terrain::profile;
 
 use crate::world::Dimension;
 
+pub mod estimate;
 mod pipeline;
 use crate::preview::{PreviewStore, render_chunk};
 
@@ -26,6 +27,8 @@ use crate::preview::{PreviewStore, render_chunk};
 pub enum Shape {
     Square,
     Circle,
+    /// `radius` along x, `radius_z` along z.
+    Rectangle,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -34,8 +37,11 @@ pub struct JobSpec {
     /// Center in block coordinates.
     pub center_x: i32,
     pub center_z: i32,
-    /// Radius in blocks.
+    /// Radius in blocks (along x for a rectangle).
     pub radius: i32,
+    /// Radius along z of a rectangle (`None`: the same as `radius`); ignored by other shapes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius_z: Option<i32>,
     pub shape: Shape,
     /// Skip chunks that already exist in the region files (never overwrite).
     #[serde(default = "default_true")]
@@ -54,23 +60,33 @@ fn default_true() -> bool {
 }
 
 impl JobSpec {
+    /// Half the size of the shape along x and z, in blocks.
+    pub fn half_extents(&self) -> (i32, i32) {
+        match self.shape {
+            Shape::Rectangle => (self.radius, self.radius_z.unwrap_or(self.radius)),
+            Shape::Square | Shape::Circle => (self.radius, self.radius),
+        }
+    }
+
     /// Chunks covered by the shape, like Chunky: chunk centers inside the shape.
     pub fn contains_chunk(&self, cx: i32, cz: i32) -> bool {
         let dx = ((cx << 4) + 8 - self.center_x) as i64;
         let dz = ((cz << 4) + 8 - self.center_z) as i64;
-        let r = self.radius as i64;
+        let (rx, rz) = self.half_extents();
+        let (rx, rz) = (rx as i64, rz as i64);
         match self.shape {
-            Shape::Square => dx.abs() <= r && dz.abs() <= r,
-            Shape::Circle => dx * dx + dz * dz <= r * r,
+            Shape::Square | Shape::Rectangle => dx.abs() <= rx && dz.abs() <= rz,
+            Shape::Circle => dx * dx + dz * dz <= rx * rx,
         }
     }
 
     pub fn chunk_bounds(&self) -> (i32, i32, i32, i32) {
+        let (rx, rz) = self.half_extents();
         (
-            (self.center_x - self.radius) >> 4,
-            (self.center_z - self.radius) >> 4,
-            (self.center_x + self.radius) >> 4,
-            (self.center_z + self.radius) >> 4,
+            (self.center_x - rx) >> 4,
+            (self.center_z - rz) >> 4,
+            (self.center_x + rx) >> 4,
+            (self.center_z + rz) >> 4,
         )
     }
 
@@ -181,6 +197,8 @@ pub struct Job {
     current_regions: Mutex<Vec<(i32, i32)>>,
     error: Mutex<Option<String>>,
     started: Instant,
+    /// When the job finished, failed or was cancelled (the elapsed time stops there).
+    ended: Mutex<Option<Instant>>,
     paused_time: Mutex<(Duration, Option<Instant>)>,
     rate_samples: Mutex<Vec<(Instant, u64)>>,
     job_file: PathBuf,
@@ -214,6 +232,7 @@ impl Job {
             current_regions: Mutex::new(Vec::new()),
             error: Mutex::new(None),
             started: Instant::now(),
+            ended: Mutex::new(None),
             paused_time: Mutex::new((Duration::ZERO, None)),
             rate_samples: Mutex::new(Vec::new()),
             job_file,
@@ -226,6 +245,9 @@ impl Job {
     }
 
     fn set_state(&self, s: JobState) {
+        if matches!(s, JobState::Finished | JobState::Cancelled | JobState::Failed) {
+            self.ended.lock().get_or_insert_with(Instant::now);
+        }
         self.state.store(s as u8, Ordering::SeqCst);
     }
 
@@ -280,10 +302,12 @@ impl Job {
         }
     }
 
+    /// Time spent running: from the start to the end (or now), without the pauses.
     fn active_elapsed(&self) -> f64 {
+        let end = self.ended.lock().unwrap_or_else(Instant::now);
         let p = self.paused_time.lock();
-        let paused = p.0 + p.1.map(|t| t.elapsed()).unwrap_or_default();
-        (self.started.elapsed().saturating_sub(paused)).as_secs_f64()
+        let paused = p.0 + p.1.map(|t| end.saturating_duration_since(t)).unwrap_or_default();
+        (end.saturating_duration_since(self.started).saturating_sub(paused)).as_secs_f64()
     }
 
     pub fn snapshot(&self) -> JobSnapshot {
@@ -526,7 +550,7 @@ impl Job {
                 }
                 let mut chunk = dim.generate_terrain(cx, cz, |dx, dz| &biomes[&(cx + dx, cz + dz)], starts);
                 let t = profile::Timer::start();
-                let pixels = render_chunk(&mut chunk);
+                let pixels = render_chunk(&mut chunk, dim.has_ceiling);
                 previews.put_chunk(cx, cz, &pixels);
                 let nbt = crate::chunk::serialize::write_chunk(&chunk, &biome_names, data_version, game_time);
                 let raw = chunker_nbt::write_root(&nbt);

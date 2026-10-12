@@ -223,34 +223,8 @@ impl Job {
                     let t = profile::Timer::start();
                     let mut guards: Vec<_> = slots.iter().map(|s| s.chunk.lock()).collect();
                     let writable: [bool; 9] = std::array::from_fn(|i| slots[i].writable);
-                    {
-                        let chunks: Vec<&mut ProtoChunk> = guards.iter_mut().map(|g| &mut ***g).collect();
-                        let mut region = FeatureRegion::new(&dim.features, cx, cz, chunks, writable);
-                        match &dim.structures {
-                            Some(structures) => {
-                                let refs = starts.references(structures, &dim.terrain, cx, cz);
-                                let mut chunk_bb = writable_area(&region);
-                                decorate(
-                                    &mut region,
-                                    |region, step, random, seed| {
-                                        decorate_step(
-                                            region,
-                                            structures,
-                                            &refs,
-                                            step,
-                                            random,
-                                            seed,
-                                            &mut chunk_bb,
-                                            None,
-                                        )
-                                    },
-                                    None,
-                                );
-                            }
-                            None => decorate(&mut region, |_, _, _, _| {}, None),
-                        }
-                    }
-                    guards[4].status = ChunkStatus::Features;
+                    let chunks: Vec<&mut ProtoChunk> = guards.iter_mut().map(|g| &mut ***g).collect();
+                    decorate_chunk(dim, starts, cx, cz, chunks, writable);
                     t.lap(profile::Phase::Features);
                     self.generated.fetch_add(1, Ordering::Relaxed);
                 });
@@ -298,7 +272,7 @@ impl Job {
             .map(|(p, s)| {
                 let t = profile::Timer::start();
                 let mut chunk = s.chunk.lock();
-                let pixels = render_chunk(&mut chunk);
+                let pixels = render_chunk(&mut chunk, dim.has_ceiling);
                 previews.put_chunk(p.0, p.1, &pixels);
                 let nbt = crate::chunk::serialize::write_chunk(&chunk, &biome_names, data_version, game_time);
                 let raw = chunker_nbt::write_root(&nbt);
@@ -366,4 +340,35 @@ impl Job {
             self.save_file();
         }
     }
+}
+
+/// The `features` step of the center of `chunks` (its 3x3 neighbourhood, z-major from -1,-1),
+/// structure pieces included; the center ends at `features`.
+pub(crate) fn decorate_chunk(
+    dim: &Dimension,
+    starts: &StartCache,
+    cx: i32,
+    cz: i32,
+    mut chunks: Vec<&mut ProtoChunk>,
+    writable: [bool; 9],
+) {
+    {
+        let neighbourhood: Vec<&mut ProtoChunk> = chunks.iter_mut().map(|c| &mut **c).collect();
+        let mut region = FeatureRegion::new(&dim.features, cx, cz, neighbourhood, writable);
+        match &dim.structures {
+            Some(structures) => {
+                let refs = starts.references(structures, &dim.terrain, cx, cz);
+                let mut chunk_bb = writable_area(&region);
+                decorate(
+                    &mut region,
+                    |region, step, random, seed| {
+                        decorate_step(region, structures, &refs, step, random, seed, &mut chunk_bb, None)
+                    },
+                    None,
+                );
+            }
+            None => decorate(&mut region, |_, _, _, _| {}, None),
+        }
+    }
+    chunks[4].status = ChunkStatus::Features;
 }

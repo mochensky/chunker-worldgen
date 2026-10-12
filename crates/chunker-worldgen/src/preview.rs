@@ -97,7 +97,8 @@ impl Tile {
             };
             payload.extend_from_slice(&v.to_le_bytes());
         }
-        let mut out = b"CKT1".to_vec();
+        // Version 2: tiles of version 1 may miss chunks or show the Nether roof; they are re-rendered.
+        let mut out = b"CKT2".to_vec();
         out.extend_from_slice(&(names.len() as u16).to_le_bytes());
         for n in names {
             out.extend_from_slice(&(n.len() as u16).to_le_bytes());
@@ -108,7 +109,7 @@ impl Tile {
     }
 
     fn decode(bytes: &[u8], biomes: &BiomeRegistry) -> Result<Self> {
-        let rest = bytes.strip_prefix(b"CKT1").context("not a tile")?;
+        let rest = bytes.strip_prefix(b"CKT2").context("not a tile")?;
         let read_u16 = |b: &[u8], at: usize| -> Result<u16> {
             Ok(u16::from_le_bytes(
                 b.get(at..at + 2).context("truncated tile")?.try_into().unwrap(),
@@ -158,10 +159,24 @@ trait Columns {
     fn biome(&mut self, x: i32, y: i32, z: i32) -> u16;
 }
 
-/// The topmost block with a map colour: `(colour, water depth above it, y)`.
-fn surface(c: &mut impl Columns, reg: &BlockRegistry, x: i32, z: i32) -> (u32, i32, i32) {
+/// The topmost block with a map colour: `(colour, water depth above it, y)`. Under a ceiling the
+/// scan starts below it: past the roof and the first open space, at the floor.
+fn surface(c: &mut impl Columns, reg: &BlockRegistry, x: i32, z: i32, ceiling: bool) -> (u32, i32, i32) {
     let min_y = c.min_y();
     let mut y = c.top(x, z);
+    if ceiling {
+        let top = y;
+        while y >= min_y && !reg.flags(c.block(x, y, z)).is_air() {
+            y -= 1;
+        }
+        while y >= min_y && reg.flags(c.block(x, y, z)).is_air() {
+            y -= 1;
+        }
+        // Solid to the bottom: show the roof after all.
+        if y < min_y {
+            y = top;
+        }
+    }
     let mut water: Option<(u32, i32)> = None;
     let mut depth = 0;
     while y >= min_y {
@@ -202,7 +217,7 @@ fn shade(colour: u32, brightness: u32) -> [u8; 3] {
     ]
 }
 
-fn render(c: &mut impl Columns, reg: &BlockRegistry) -> ChunkPixels {
+fn render(c: &mut impl Columns, reg: &BlockRegistry, ceiling: bool) -> ChunkPixels {
     let mut out = ChunkPixels {
         rgb: [[0; 3]; 16],
         biomes: [NO_BIOME; 16],
@@ -210,7 +225,7 @@ fn render(c: &mut impl Columns, reg: &BlockRegistry) -> ChunkPixels {
     for pz in 0..PIXELS_PER_CHUNK as i32 {
         for px in 0..PIXELS_PER_CHUNK as i32 {
             let (x, z) = (px * STEP + STEP / 2, pz * STEP + STEP / 2);
-            let (colour, depth, y) = surface(c, reg, x, z);
+            let (colour, depth, y) = surface(c, reg, x, z, ceiling);
             let i = (pz * PIXELS_PER_CHUNK as i32 + px) as usize;
             if colour == 0 {
                 out.rgb[i] = EMPTY_CHUNK;
@@ -228,7 +243,7 @@ fn render(c: &mut impl Columns, reg: &BlockRegistry) -> ChunkPixels {
                     220
                 }
             } else {
-                let north = surface(c, reg, x, z - 1).2;
+                let north = surface(c, reg, x, z - 1, ceiling).2;
                 let d = (y - north) as f64 + (checker - 0.5) * 0.4;
                 if d > 0.6 {
                     255
@@ -262,10 +277,10 @@ impl Columns for ProtoColumns<'_> {
     }
 }
 
-/// Preview pixels of a freshly generated chunk.
-pub fn render_chunk(chunk: &mut ProtoChunk) -> ChunkPixels {
+/// Preview pixels of a freshly generated chunk; `has_ceiling` maps the floor below a ceiling.
+pub fn render_chunk(chunk: &mut ProtoChunk, has_ceiling: bool) -> ChunkPixels {
     let reg = chunk.blocks.clone();
-    render(&mut ProtoColumns(chunk), &reg)
+    render(&mut ProtoColumns(chunk), &reg, has_ceiling)
 }
 
 /// Decoded section of a stored chunk.
@@ -478,6 +493,8 @@ pub struct RenderContext {
     pub min_y: i32,
     pub height: i32,
     pub region_dir: PathBuf,
+    /// Map the floor below the ceiling (see [`render_chunk`]).
+    pub has_ceiling: bool,
 }
 
 /// Renders every chunk of a region file (`None` if the file does not exist).
@@ -496,7 +513,7 @@ pub fn render_region_file(ctx: &RenderContext, pos: RegionPos) -> Result<Option<
             let Ok(nbt) = raw.decode_nbt() else { continue };
             let mut chunk =
                 StoredChunk::new(&nbt, ctx.min_y, ctx.height, &ctx.blocks, &ctx.biomes, &mut states);
-            let pixels = render(&mut chunk, &ctx.blocks);
+            let pixels = render(&mut chunk, &ctx.blocks, ctx.has_ceiling);
             tile.put(lx, lz, &pixels);
         }
     }
@@ -598,23 +615,28 @@ impl PreviewStore {
         }
     }
 
-    /// Called before a job generates chunks of `pos`: starts from the chunks that already exist.
-    pub fn begin_region(&self, pos: RegionPos) {
+    /// Makes `pos` live, starting from the chunks that already exist (a region is written in several
+    /// batches: its own chunks first, the ones along its edges when the neighbours are decorated).
+    fn make_live(&self, pos: RegionPos) {
         if self.live.lock().contains_key(&pos) {
             return;
         }
         let tile = self.tile(pos).unwrap_or_else(Tile::empty);
-        self.live.lock().insert(pos, tile);
+        self.live.lock().entry(pos).or_insert(tile);
+    }
+
+    /// Called before a job generates chunks of `pos`.
+    pub fn begin_region(&self, pos: RegionPos) {
+        self.make_live(pos);
         self.bump(pos);
     }
 
     pub fn put_chunk(&self, chunk_x: i32, chunk_z: i32, pixels: &ChunkPixels) {
         let pos = RegionPos::of_chunk(chunk_x, chunk_z);
-        self.live
-            .lock()
-            .entry(pos)
-            .or_insert_with(Tile::empty)
-            .put(chunk_x, chunk_z, pixels);
+        self.make_live(pos);
+        if let Some(tile) = self.live.lock().get_mut(&pos) {
+            tile.put(chunk_x, chunk_z, pixels);
+        }
         self.bump(pos);
     }
 

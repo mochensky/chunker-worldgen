@@ -16,7 +16,7 @@ Supported version: Minecraft 26.3.
 
 ```toml
 [dependencies]
-chunker-worldgen = "0.1"
+chunker-worldgen = "0.2"
 ```
 
 ```rust
@@ -35,6 +35,7 @@ let job = world.start(JobSpec {
     center_x: 0,
     center_z: 0,
     radius: 1024,
+    radius_z: None,
     shape: Shape::Square,
     skip_existing: true,
     threads: 0,

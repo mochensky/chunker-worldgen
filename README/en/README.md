@@ -30,15 +30,15 @@ Supported version: **Minecraft 26.3** (data version 5023). The code is designed 
 
 ```toml
 [dependencies]
-chunker-worldgen = "0.1"
+chunker-worldgen = "0.2"
 ```
 
 The other crates come along as its dependencies; add them yourself only if you use them directly:
 
 ```toml
-chunker-data = "0.1"
-chunker-anvil = "0.1"
-chunker-nbt = "0.1"
+chunker-data = "0.2"
+chunker-anvil = "0.2"
+chunker-nbt = "0.2"
 ```
 
 What each crate does:
@@ -99,6 +99,7 @@ let job = world.start(JobSpec {
     center_x: 0,
     center_z: 0,
     radius: 1024,
+    radius_z: None,
     shape: Shape::Square,
     skip_existing: true,
     threads: 0,
@@ -122,7 +123,8 @@ What the job does:
 - **Pause and resume** — `world.pause()`, `world.resume()`, `world.cancel()`. Progress is saved in `<world>/.chunker/job.json`: `World::open` finds an unfinished job, and `resume()` continues it after a restart.
 - **Terrain only** — `decorate: false` saves chunks at `terrain`, about a third faster; the server then places structures and features when the chunks first load.
 - **Difficulty and time** — read from the world (`level.dat` and `data/minecraft/world_clocks.dat`); structure mobs get their equipment from them.
-- **Map previews** — `world.previews(&dimension)` keeps a 128x128 map image per region (vanilla map colours and biomes), updated while the job runs.
+- **Map previews** — `world.previews(&dimension)` keeps a 128x128 map image per region (vanilla map colours and biomes), updated while the job runs. In the Nether the map shows the floor below the bedrock roof.
+- **Size estimate** — `world.estimate_chunk_bytes(&spec)` generates sample chunks of the area like the job does and returns the bytes per chunk on disk, so it follows the dimension, the data packs and the version.
 
 `JobSpec` fields:
 
@@ -130,8 +132,9 @@ What the job does:
 |---|---|
 | `dimension` | dimension id, e.g. `minecraft:overworld`, `minecraft:the_nether` |
 | `center_x`, `center_z` | center in block coordinates |
-| `radius` | radius in blocks |
-| `shape` | `Square` or `Circle`; a chunk belongs to the area when its center does |
+| `radius` | radius in blocks (half the width along x for a rectangle) |
+| `radius_z` | half the length along z of a `Rectangle`; `None` for the other shapes |
+| `shape` | `Square`, `Circle` or `Rectangle`; a chunk belongs to the area when its center does |
 | `skip_existing` | leave chunks that already exist as they are |
 | `threads` | worker threads, `0` for all CPUs |
 | `decorate` | run the `features` step (structures, features, mobs) |

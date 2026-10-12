@@ -45,6 +45,7 @@ fn main() -> Result<()> {
             center_x: 0,
             center_z: 0,
             radius,
+            radius_z: None,
             shape: Shape::Square,
             skip_existing: true,
             threads: 0,

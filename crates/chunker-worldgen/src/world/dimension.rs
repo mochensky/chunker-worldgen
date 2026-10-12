@@ -24,6 +24,8 @@ pub struct Dimension {
     pub id: Identifier,
     pub min_y: i32,
     pub height: i32,
+    /// See [`DimensionInfo::has_ceiling`].
+    pub has_ceiling: bool,
     pub region_dir: PathBuf,
     pub terrain: TerrainGenerator,
     pub biomes: Arc<BiomeRegistry>,
@@ -43,6 +45,8 @@ pub struct DimensionInfo {
     pub reason: Option<String>,
     pub min_y: i32,
     pub height: i32,
+    /// A ceiling over the dimension (the Nether's bedrock roof): previews map the floor below it.
+    pub has_ceiling: bool,
 }
 
 /// `(min_y, height, has_skylight, json)` of a dimension type (id or inline).
@@ -54,7 +58,7 @@ fn dimension_type_full(reg: &WorldgenRegistries, v: &Value) -> Result<(i32, i32,
         )?,
         other => other.clone(),
     };
-    let (min_y, height) = dimension_type(reg, &json)?;
+    let (min_y, height, _) = dimension_type(reg, &json)?;
     Ok((
         min_y,
         height,
@@ -63,7 +67,8 @@ fn dimension_type_full(reg: &WorldgenRegistries, v: &Value) -> Result<(i32, i32,
     ))
 }
 
-fn dimension_type(reg: &WorldgenRegistries, v: &Value) -> Result<(i32, i32)> {
+/// `(min_y, height, has_ceiling)` of a dimension type (id or inline).
+fn dimension_type(reg: &WorldgenRegistries, v: &Value) -> Result<(i32, i32, bool)> {
     let json = match v {
         Value::String(id) => reg.packs.require_json(
             "dimension_type",
@@ -79,7 +84,8 @@ fn dimension_type(reg: &WorldgenRegistries, v: &Value) -> Result<(i32, i32)> {
         .get("height")
         .and_then(Value::as_i64)
         .context("dimension type height")? as i32;
-    Ok((min_y, height))
+    let has_ceiling = json.get("has_ceiling").and_then(Value::as_bool).unwrap_or(false);
+    Ok((min_y, height, has_ceiling))
 }
 
 impl Dimension {
@@ -89,10 +95,10 @@ impl Dimension {
             .and_then(Value::as_str)
             .unwrap_or("?")
             .to_owned();
-        let (min_y, height) = json
+        let (min_y, height, has_ceiling) = json
             .get("type")
             .and_then(|t| dimension_type(reg, t).ok())
-            .unwrap_or((0, 0));
+            .unwrap_or((0, 0, false));
         let supported = generator == "minecraft:noise" || generator == "noise";
         DimensionInfo {
             id: id.to_string(),
@@ -101,6 +107,7 @@ impl Dimension {
             supported,
             min_y,
             height,
+            has_ceiling,
         }
     }
 
@@ -163,7 +170,12 @@ impl Dimension {
         }
         let structures = structure_data
             .map(|(registry, templates)| StructureGenerator::new(registry, templates, &terrain));
+        let has_ceiling = dimension_type
+            .get("has_ceiling")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         Ok(Dimension {
+            has_ceiling,
             structures,
             features,
             id: id.clone(),

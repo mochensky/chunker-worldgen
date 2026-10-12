@@ -37,6 +37,9 @@ pub struct WorldOptions {
     pub allow_download: bool,
 }
 
+/// Dimension, `decorate` and sample spots of a size estimate.
+type EstimateKey = (Identifier, bool, Vec<(i32, i32)>);
+
 /// What a world is: folders, version, seed, data packs and dimensions.
 #[derive(Clone, Debug, Serialize)]
 pub struct WorldSummary {
@@ -66,6 +69,8 @@ pub struct World {
     job: Mutex<Option<Arc<Job>>>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     game_time: i64,
+    /// Measured bytes per chunk.
+    size_estimates: Mutex<FxHashMap<EstimateKey, f64>>,
     /// Structure registry and template manager, loaded on first use.
     structure_data: std::sync::OnceLock<(
         Arc<crate::structure::registry::StructureRegistry>,
@@ -102,6 +107,7 @@ impl World {
             worker: Mutex::new(None),
             game_time,
             structure_data: std::sync::OnceLock::new(),
+            size_estimates: Mutex::default(),
         });
         world.restore_job()?;
         Ok(world)
@@ -219,17 +225,17 @@ impl World {
             .join("preview")
             .join(id.namespace())
             .join(id.path());
-        let (min_y, height, region_dir) = {
+        let (min_y, height, has_ceiling, region_dir) = {
             let world = self.files.lock();
             let info = world
                 .dimensions
                 .iter()
                 .find(|(d, _)| d == id)
                 .map(|(d, json)| Dimension::describe(&self.registries, d, json));
-            let (min_y, height) = info
+            let (min_y, height, has_ceiling) = info
                 .filter(|i| i.height > 0)
-                .map_or((-64, 384), |i| (i.min_y, i.height));
-            (min_y, height, world.region_dir(id))
+                .map_or((-64, 384, false), |i| (i.min_y, i.height, i.has_ceiling));
+            (min_y, height, has_ceiling, world.region_dir(id))
         };
         let ctx = RenderContext {
             blocks: self.registries.blocks.clone(),
@@ -237,12 +243,41 @@ impl World {
             min_y,
             height,
             region_dir,
+            has_ceiling,
         };
         self.previews
             .lock()
             .entry(id.clone())
             .or_insert_with(|| Arc::new(PreviewStore::new(dir, ctx)))
             .clone()
+    }
+
+    /// Bytes on disk per chunk a job with `spec` will write, measured on sample chunks generated like
+    /// the job does (the center of the area and four points halfway to its edge). Takes a fraction of a
+    /// second the first time; results are cached.
+    pub fn estimate_chunk_bytes(&self, spec: &JobSpec) -> Result<f64> {
+        let id = Identifier::parse(&spec.dimension).context("bad dimension id")?;
+        // Spots on a coarse grid, so that small changes of the area reuse the measurement.
+        let snap = |v: i32| v.div_euclid(8) * 8;
+        let (cx, cz) = (snap(spec.center_x >> 4), snap(spec.center_z >> 4));
+        let (rx, rz) = spec.half_extents();
+        let (dx, dz) = (snap(rx / 32), snap(rz / 32));
+        let mut spots = vec![(cx, cz)];
+        if dx > 0 {
+            spots.extend([(cx - dx, cz), (cx + dx, cz)]);
+        }
+        if dz > 0 {
+            spots.extend([(cx, cz - dz), (cx, cz + dz)]);
+        }
+        let key = (id.clone(), spec.decorate, spots.clone());
+        if let Some(v) = self.size_estimates.lock().get(&key) {
+            return Ok(*v);
+        }
+        let dim = self.dimension(&id)?;
+        let data_version = self.files.lock().data_version;
+        let bytes = job::estimate::chunk_bytes(&dim, &spots, spec.decorate, data_version, self.game_time);
+        self.size_estimates.lock().insert(key, bytes);
+        Ok(bytes)
     }
 
     /// Distinct map colour of every biome (indexed by biome id).
@@ -264,7 +299,8 @@ impl World {
 
     /// Starts a new job. Fails while another job is still active.
     pub fn start(self: &Arc<Self>, spec: JobSpec) -> Result<Arc<Job>> {
-        if spec.radius <= 0 {
+        let (rx, rz) = spec.half_extents();
+        if rx <= 0 || rz <= 0 {
             bail!("radius must be positive");
         }
         if let Some(j) = self.job()
