@@ -10,7 +10,7 @@ members = [
 default-members = ["crates/chunker-worldgen"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT OR Apache-2.0"
@@ -18,10 +18,10 @@ repository = "https://github.com/mochensky/chunker-worldgen"
 
 [workspace.dependencies]
 # internal
-chunker-nbt = { path = "crates/chunker-nbt", version = "0.2.0" }
-chunker-anvil = { path = "crates/chunker-anvil", version = "0.2.0" }
-chunker-data = { path = "crates/chunker-data", version = "0.2.0" }
-chunker-worldgen = { path = "crates/chunker-worldgen", version = "0.2.0" }
+chunker-nbt = { path = "crates/chunker-nbt", version = "0.2.1" }
+chunker-anvil = { path = "crates/chunker-anvil", version = "0.2.1" }
+chunker-data = { path = "crates/chunker-data", version = "0.2.1" }
+chunker-worldgen = { path = "crates/chunker-worldgen", version = "0.2.1" }
 
 # external
 anyhow = "1"

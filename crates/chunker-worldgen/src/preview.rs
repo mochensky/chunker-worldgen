@@ -20,7 +20,7 @@ use chunker_data::Identifier;
 use chunker_data::blocks::{BlockRegistry, BlockState};
 use chunker_nbt::{Compound, Tag};
 use parking_lot::Mutex;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub const PIXELS_PER_CHUNK: usize = 4;
 pub const TILE_SIZE: usize = 32 * PIXELS_PER_CHUNK;
@@ -63,6 +63,51 @@ impl Tile {
                 self.biomes[p] = pixels.biomes[pz * PIXELS_PER_CHUNK + px];
             }
         }
+    }
+
+    /// Halves four tiles (x then z order) into one: colours are averaged over the pixels that have
+    /// a chunk, the biome is the most common one.
+    fn downsample(children: &[Option<Arc<Tile>>; 4]) -> Self {
+        const HALF: usize = TILE_SIZE / 2;
+        let mut out = Self::empty();
+        for (i, child) in children.iter().enumerate() {
+            let Some(child) = child else { continue };
+            let (ox, oz) = ((i & 1) * HALF, (i >> 1) * HALF);
+            for z in 0..HALF {
+                for x in 0..HALF {
+                    let src = [
+                        2 * z * TILE_SIZE + 2 * x,
+                        2 * z * TILE_SIZE + 2 * x + 1,
+                        (2 * z + 1) * TILE_SIZE + 2 * x,
+                        (2 * z + 1) * TILE_SIZE + 2 * x + 1,
+                    ];
+                    let mut sum = [0u32; 3];
+                    let mut n = 0;
+                    for &s in &src {
+                        if child.rgba[s * 4 + 3] != 0 {
+                            for (c, v) in sum.iter_mut().zip(&child.rgba[s * 4..s * 4 + 3]) {
+                                *c += *v as u32;
+                            }
+                            n += 1;
+                        }
+                    }
+                    if n == 0 {
+                        continue;
+                    }
+                    let p = (oz + z) * TILE_SIZE + ox + x;
+                    let avg = sum.map(|c| ((c + n / 2) / n) as u8);
+                    out.rgba[p * 4..p * 4 + 4].copy_from_slice(&[avg[0], avg[1], avg[2], 255]);
+                    let biomes = src.map(|s| child.biomes[s]);
+                    out.biomes[p] = biomes
+                        .iter()
+                        .filter(|b| **b != NO_BIOME)
+                        .max_by_key(|b| biomes.iter().filter(|o| o == b).count())
+                        .copied()
+                        .unwrap_or(NO_BIOME);
+                }
+            }
+        }
+        out
     }
 
     pub fn surface_png(&self) -> Vec<u8> {
@@ -523,6 +568,18 @@ pub fn render_region_file(ctx: &RenderContext, pos: RegionPos) -> Result<Option<
 // ---------------------------------------------------------------------------------------------
 // Store
 
+/// Highest overview level: a tile of level `l` covers `2^l` x `2^l` regions.
+pub const MAX_LEVEL: u8 = 8;
+/// Overview tiles kept in memory (about 100 KB each).
+const OVERVIEW_CACHE: usize = 384;
+
+struct Overview {
+    /// Highest region version inside the tile when it was built.
+    stamp: u64,
+    tile: Arc<Tile>,
+    used: u64,
+}
+
 pub struct PreviewStore {
     dir: PathBuf,
     ctx: RenderContext,
@@ -530,6 +587,10 @@ pub struct PreviewStore {
     live: Mutex<FxHashMap<RegionPos, Tile>>,
     versions: Mutex<FxHashMap<RegionPos, u64>>,
     seq: AtomicU64,
+    /// Regions with a region file or a live tile; read from the region folder on first use.
+    known: Mutex<Option<FxHashSet<RegionPos>>>,
+    overviews: Mutex<FxHashMap<(u8, i32, i32), Overview>>,
+    clock: AtomicU64,
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
@@ -544,6 +605,9 @@ impl PreviewStore {
             live: Mutex::default(),
             versions: Mutex::default(),
             seq: AtomicU64::new(1),
+            known: Mutex::default(),
+            overviews: Mutex::default(),
+            clock: AtomicU64::new(0),
         }
     }
 
@@ -621,6 +685,9 @@ impl PreviewStore {
         if self.live.lock().contains_key(&pos) {
             return;
         }
+        if let Some(known) = self.known.lock().as_mut() {
+            known.insert(pos);
+        }
         let tile = self.tile(pos).unwrap_or_else(Tile::empty);
         self.live.lock().entry(pos).or_insert(tile);
     }
@@ -674,6 +741,90 @@ impl PreviewStore {
 
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// A tile of `TILE_SIZE` pixels covering `2^level` x `2^level` regions (level 0 is
+    /// [`tile`](Self::tile)), so a zoomed-out map needs a few tiles instead of one per region.
+    /// Built from the four tiles of the level below and kept in memory until a region inside changes;
+    /// its version is the highest [`version`](Self::version) of its regions.
+    pub fn overview(&self, level: u8, x: i32, z: i32) -> Option<Arc<Tile>> {
+        let level = level.min(MAX_LEVEL);
+        if level == 0 {
+            return self.tile(RegionPos { x, z }).map(Arc::new);
+        }
+        let regions: Vec<(RegionPos, u64)> = {
+            let mut known = self.known.lock();
+            let known = known.get_or_insert_with(|| self.scan_regions());
+            let versions = self.versions.lock();
+            known
+                .iter()
+                .filter(|p| (p.x >> level, p.z >> level) == (x, z))
+                .map(|p| (*p, versions.get(p).copied().unwrap_or(0)))
+                .collect()
+        };
+        self.build_overview(level, x, z, &regions)
+    }
+
+    fn scan_regions(&self) -> FxHashSet<RegionPos> {
+        let mut out: FxHashSet<RegionPos> = fs::read_dir(&self.ctx.region_dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter_map(|e| RegionPos::parse_file_name(&e.file_name().to_string_lossy()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.extend(self.live.lock().keys().copied());
+        out
+    }
+
+    /// `regions`: the known regions inside the tile with their versions.
+    fn build_overview(&self, level: u8, x: i32, z: i32, regions: &[(RegionPos, u64)]) -> Option<Arc<Tile>> {
+        if regions.is_empty() {
+            return None;
+        }
+        if level == 0 {
+            return self.tile(RegionPos { x, z }).map(Arc::new);
+        }
+        let stamp = regions.iter().map(|(_, v)| *v).max().unwrap_or(0);
+        let used = self.clock.fetch_add(1, Ordering::Relaxed);
+        if let Some(o) = self.overviews.lock().get_mut(&(level, x, z))
+            && o.stamp >= stamp
+        {
+            o.used = used;
+            return Some(o.tile.clone());
+        }
+        let mut children: [Option<Arc<Tile>>; 4] = Default::default();
+        for (i, child) in children.iter_mut().enumerate() {
+            let (cx, cz) = (2 * x + (i & 1) as i32, 2 * z + (i >> 1) as i32);
+            let inside: Vec<(RegionPos, u64)> = regions
+                .iter()
+                .filter(|(p, _)| (p.x >> (level - 1), p.z >> (level - 1)) == (cx, cz))
+                .copied()
+                .collect();
+            *child = self.build_overview(level - 1, cx, cz, &inside);
+        }
+        if children.iter().all(Option::is_none) {
+            return None;
+        }
+        let tile = Arc::new(Tile::downsample(&children));
+        let mut cache = self.overviews.lock();
+        if cache.len() >= OVERVIEW_CACHE {
+            // Drop the least recently used quarter.
+            let mut ages: Vec<u64> = cache.values().map(|o| o.used).collect();
+            ages.sort_unstable();
+            let cutoff = ages[ages.len() / 4];
+            cache.retain(|_, o| o.used > cutoff);
+        }
+        cache.insert(
+            (level, x, z),
+            Overview {
+                stamp,
+                tile: tile.clone(),
+                used,
+            },
+        );
+        Some(tile)
     }
 }
 
@@ -840,6 +991,24 @@ pub fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn downsample_averages_existing_pixels() {
+        let mut tile = Tile::empty();
+        // Top-left 2x2 block of the child: three pixels with chunks, one without.
+        for (p, c, b) in [(0, 30u8, 1u16), (1, 60, 2), (TILE_SIZE, 90, 2)] {
+            tile.rgba[p * 4..p * 4 + 4].copy_from_slice(&[c, c, c, 255]);
+            tile.biomes[p] = b;
+        }
+        let children = [None, Some(Arc::new(tile)), None, None];
+        let out = Tile::downsample(&children);
+        // The child is the top-right quadrant.
+        let p = TILE_SIZE / 2;
+        assert_eq!(&out.rgba[p * 4..p * 4 + 4], &[60, 60, 60, 255]);
+        assert_eq!(out.biomes[p], 2);
+        assert_eq!(out.rgba[3], 0);
+        assert_eq!(out.rgba[(p + 1) * 4 + 3], 0);
+    }
 
     #[test]
     fn crc_matches_reference() {

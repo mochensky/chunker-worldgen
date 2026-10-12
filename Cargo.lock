@@ -68,7 +68,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "chunker-anvil"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chunker-nbt",
  "flate2",
@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "chunker-data"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chunker-nbt",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "chunker-nbt"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "flate2",
  "thiserror",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "chunker-worldgen"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chunker-anvil",
@@ -975,7 +975,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "serde_json",
